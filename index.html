@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Street Drive — V1</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111;font-family:Arial,sans-serif;touch-action:none}
+canvas{display:block;width:100%;height:100%;background:#1b1b1b}
+#hud{position:fixed;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;color:white;font-weight:bold;font-size:18px;text-shadow:0 2px 3px #000;pointer-events:none}
+#controls{position:fixed;bottom:22px;left:0;right:0;display:flex;justify-content:space-between;padding:0 22px}
+button{width:82px;height:82px;border-radius:50%;border:2px solid rgba(255,255,255,.45);background:rgba(255,255,255,.15);color:white;font-size:34px;font-weight:bold;backdrop-filter:blur(4px);user-select:none}
+#gas{width:105px;height:105px;font-size:20px;background:rgba(50,180,80,.25)}
+#start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(#0008,#000b);color:white}
+.panel{text-align:center;background:#151515eF;border:1px solid #555;border-radius:20px;padding:28px 25px;max-width:330px}
+.panel h1{margin:0 0 8px;font-size:30px}
+.panel p{opacity:.8;margin:8px 0 20px}
+#play{border-radius:12px;width:180px;height:55px;font-size:18px;background:#2f8cff}
+#gameover{display:none}
+.small{font-size:13px;opacity:.7}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><span>🏁 <span id="score">0</span></span><span>⚡ <span id="speed">0</span> km/h</span></div>
+
+<div id="controls">
+  <button id="left">◀</button>
+  <button id="gas">GAZ</button>
+  <button id="right">▶</button>
+</div>
+
+<div id="start">
+  <div class="panel" id="menu">
+    <h1>STREET DRIVE</h1>
+    <p>Versioni 1.0 — prototip</p>
+    <p class="small">Lëviz me ◀ ▶ dhe mbaj GAZ për të shpejtuar.</p>
+    <button id="play">LUJ TANI</button>
+  </div>
+  <div class="panel" id="gameover">
+    <h1>💥 GAME OVER</h1>
+    <p>Rezultati: <b id="finalScore">0</b></p>
+    <button id="restart">PËRSËRI</button>
+  </div>
+</div>
+
+<script>
+const c=document.getElementById('game'),ctx=c.getContext('2d');
+let W,H,dpr;
+function resize(){dpr=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+
+let running=false,score=0,speed=0,playerX=.5,roadScroll=0,last=0,spawn=0;
+let cars=[];
+const keys={left:false,right:false,gas:false};
+
+function press(id,k){
+ const b=document.getElementById(id);
+ const down=e=>{e.preventDefault();keys[k]=true};
+ const up=e=>{e.preventDefault();keys[k]=false};
+ b.addEventListener('pointerdown',down);b.addEventListener('pointerup',up);
+ b.addEventListener('pointercancel',up);b.addEventListener('pointerleave',up);
+}
+press('left','left');press('right','right');press('gas','gas');
+
+function road(){
+ const horizon=H*.25, bottom=H;
+ ctx.fillStyle='#6b7075';ctx.fillRect(0,0,W,H);
+ ctx.fillStyle='#23802f';ctx.fillRect(0,horizon,W,H-horizon);
+ ctx.fillStyle='#30343a';
+ ctx.beginPath();ctx.moveTo(W*.36,horizon);ctx.lineTo(W*.64,horizon);ctx.lineTo(W*.94,H);ctx.lineTo(W*.06,H);ctx.closePath();ctx.fill();
+ // shoulders
+ ctx.strokeStyle='#ddd';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(W*.36,horizon);ctx.lineTo(W*.06,H);ctx.moveTo(W*.64,horizon);ctx.lineTo(W*.94,H);ctx.stroke();
+ // center dashes
+ const dash=48, gap=36, off=roadScroll%(dash+gap);
+ for(let y=horizon-off;y<H;y+=dash+gap){
+   const p=(y-horizon)/(H-horizon), x=W/2;
+   ctx.fillStyle='#f5f5f5';ctx.fillRect(x-4,y,8,Math.max(18,38*(.35+p)));
+ }
+}
+
+function car(x,y,color,scale=1){
+ ctx.save();ctx.translate(x,y);ctx.scale(scale,scale);
+ ctx.fillStyle='rgba(0,0,0,.3)';ctx.beginPath();ctx.ellipse(0,25,28,9,0,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle=color;ctx.beginPath();ctx.roundRect(-22,-45,44,78,9);ctx.fill();
+ ctx.fillStyle='#17202a';ctx.beginPath();ctx.roundRect(-15,-30,30,25,6);ctx.fill();
+ ctx.fillStyle='#111';ctx.fillRect(-25,-30,7,19);ctx.fillRect(18,-30,7,19);ctx.fillRect(-25,8,7,19);ctx.fillRect(18,8,7,19);
+ ctx.fillStyle='#ffeb55';ctx.fillRect(-14,20,8,5);ctx.fillRect(6,20,8,5);
+ ctx.restore();
+}
+
+function spawnCar(){
+ const lanes=[.41,.5,.59];
+ const lane=lanes[Math.floor(Math.random()*3)];
+ cars.push({x:lane,y:H*.22-80,color:['#e33','#3af','#f5b400','#eee'][Math.floor(Math.random()*4)]});
+}
+
+function collide(a,b){
+ return Math.abs(a.x-b.x)<38 && Math.abs(a.y-b.y)<68;
+}
+
+function update(dt){
+ const target=speed;
+ speed += ((keys.gas?125:55)-speed)*dt*1.7;
+ if(keys.left) playerX-=dt*.55*(.5+speed/100);
+ if(keys.right) playerX+=dt*.55*(.5+speed/100);
+ playerX=Math.max(.13,Math.min(.87,playerX));
+ roadScroll+=speed*dt*1.8;
+ score+=speed*dt*.03;
+ spawn-=dt;
+ if(spawn<=0){spawnCar();spawn=Math.max(.45,1.15-speed/170)}
+ cars.forEach(o=>o.y += (35+speed*.9)*dt);
+ cars=cars.filter(o=>o.y<H+100);
+ const py=H-155;
+ for(const o of cars) if(collide({x:playerX*W,y:py},o)) end();
+}
+
+function draw(){
+ road();
+ const py=H-155;
+ cars.forEach(o=>car(o.x*W,o.y,o.color,.72));
+ car(playerX*W,py,'#20a0ff',1);
+}
+
+function loop(t){
+ if(!running)return;
+ const dt=Math.min((t-last)/1000,.033);last=t;
+ update(dt);draw();
+ document.getElementById('score').textContent=Math.floor(score);
+ document.getElementById('speed').textContent=Math.floor(speed);
+ requestAnimationFrame(loop);
+}
+
+function start(){
+ score=0;speed=0;playerX=.5;roadScroll=0;cars=[];running=true;
+ document.getElementById('start').style.display='none';last=performance.now();requestAnimationFrame(loop);
+}
+function end(){
+ if(!running)return;
+ running=false;
+ document.getElementById('finalScore').textContent=Math.floor(score);
+ document.getElementById('start').style.display='flex';
+ document.getElementById('menu').style.display='none';
+ document.getElementById('gameover').style.display='block';
+}
+document.getElementById('play').onclick=start;
+document.getElementById('restart').onclick=start;
+</script>
+</body>
+</html>
